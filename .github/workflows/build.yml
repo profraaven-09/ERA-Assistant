@@ -25,21 +25,868 @@ jobs:
         mkdir -p app/src/main/res/xml
         mkdir -p app/src/main/res/values
 
-        [ -f MainActivity.kt ] && mv -f MainActivity.kt app/src/main/java/com/era/assistant/
-        [ -f EraAccessibilityService.kt ] && mv -f EraAccessibilityService.kt app/src/main/java/com/era/assistant/
-        [ -f EraAgentEngine.kt ] && mv -f EraAgentEngine.kt app/src/main/java/com/era/assistant/
         [ -f ShakeDetectorService.kt ] && mv -f ShakeDetectorService.kt app/src/main/java/com/era/assistant/
-        [ -f AndroidManifest.xml ] && mv -f AndroidManifest.xml app/src/main/
+        [ -f EraAccessibilityService.kt ] && mv -f EraAccessibilityService.kt app/src/main/java/com/era/assistant/
         [ -f accessibility_service_config.xml ] && mv -f accessibility_service_config.xml app/src/main/res/xml/
         [ -f colors.xml ] && mv -f colors.xml app/src/main/res/values/
         [ -f strings.xml ] && mv -f strings.xml app/src/main/res/values/
         [ -f themes.xml ] && mv -f themes.xml app/src/main/res/values/
 
-        cat << 'EOF' > gradle.properties
-        android.useAndroidX=true
-        android.nonTransitiveRClass=true
-        org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
-        EOF
+        # Manifest with Default Assistant
+        cat << 'MANIFEST' > app/src/main/AndroidManifest.xml
+        <?xml version="1.0" encoding="utf-8"?>
+        <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+            <uses-permission android:name="android.permission.INTERNET" />
+            <uses-permission android:name="android.permission.RECORD_AUDIO" />
+            <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+            <uses-permission android:name="android.permission.VIBRATE" />
+            <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+            <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+            <uses-permission android:name="android.permission.CAMERA" />
+
+            <application
+                android:allowBackup="true"
+                android:icon="@android:drawable/ic_dialog_info"
+                android:label="ERA AI"
+                android:roundIcon="@android:drawable/ic_dialog_info"
+                android:supportsRtl="true"
+                android:theme="@style/Theme.EraAssistant">
+                
+                <activity
+                    android:name=".MainActivity"
+                    android:exported="true"
+                    android:theme="@style/Theme.EraAssistant">
+                    <intent-filter>
+                        <action android:name="android.intent.action.MAIN" />
+                        <category android:name="android.intent.category.LAUNCHER" />
+                    </intent-filter>
+                    <intent-filter>
+                        <action android:name="android.intent.action.ASSIST" />
+                        <category android:name="android.intent.category.DEFAULT" />
+                    </intent-filter>
+                </activity>
+
+                <service android:name=".ShakeDetectorService" android:enabled="true" android:exported="false" />
+
+                <service
+                    android:name=".EraAccessibilityService"
+                    android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+                    android:exported="true">
+                    <intent-filter>
+                        <action android:name="android.accessibilityservice.AccessibilityService" />
+                    </intent-filter>
+                    <meta-data
+                        android:name="android.accessibilityservice"
+                        android:resource="@xml/accessibility_service_config" />
+                </service>
+
+            </application>
+        </manifest>
+        MANIFEST
+
+        # Engine with Gemini AI Brain, Apps & Flashlight
+        cat << 'KOTLIN_ENGINE' > app/src/main/java/com/era/assistant/EraAgentEngine.kt
+        package com.era.assistant
+
+        import android.content.Context
+        import android.content.Intent
+        import android.content.pm.PackageManager
+        import android.hardware.camera2.CameraManager
+        import kotlinx.coroutines.CoroutineScope
+        import kotlinx.coroutines.Dispatchers
+        import kotlinx.coroutines.launch
+        import okhttp3.MediaType.Companion.toMediaType
+        import okhttp3.OkHttpClient
+        import okhttp3.Request
+        import okhttp3.RequestBody.Companion.toRequestBody
+        import org.json.JSONArray
+        import org.json.JSONObject
+
+        object EraAgentEngine {
+
+            fun processCommand(
+                context: Context,
+                command: String,
+                geminiApiKey: String,
+                personality: String,
+                onResponse: (String, String) -> Unit
+            ) {
+                val lower = command.lowercase().trim()
+
+                // 1. Greetings
+                if (lower == "hira" || lower == "era" || lower.startsWith("hello") || lower.startsWith("hi")) {
+                    val reply = when (personality) {
+                        "Jarvis" -> "At your service, sir. All systems running optimal."
+                        "Tactical" -> "ERA online. Status: operational. Awaiting command."
+                        else -> "Hello! I am ERA, your personal super AI. Tell me what to do!"
+                    }
+                    onResponse("ERA", reply)
+                    return
+                }
+
+                // 2. Real App Launching
+                if (lower.startsWith("open ") || lower.startsWith("launch ") || lower.contains("whatsapp") || lower.contains("youtube") || lower.contains("camera")) {
+                    val appQuery = lower.removePrefix("open ").removePrefix("launch ").trim()
+                    val targetName = when {
+                        lower.contains("whatsapp") -> "whatsapp"
+                        lower.contains("youtube") -> "youtube"
+                        lower.contains("chrome") -> "chrome"
+                        lower.contains("camera") -> "camera"
+                        lower.contains("instagram") -> "instagram"
+                        lower.contains("settings") -> "settings"
+                        else -> appQuery
+                    }
+
+                    val launched = launchApp(context, targetName)
+                    if (launched) {
+                        onResponse("System", "Opening $targetName.")
+                        return
+                    }
+                }
+
+                // 3. Torch / Flashlight
+                if (lower.contains("torch") || lower.contains("flashlight")) {
+                    val enable = !lower.contains("off")
+                    toggleTorch(context, enable)
+                    onResponse("System", if (enable) "Torch turned ON." else "Torch turned OFF.")
+                    return
+                }
+
+                // 4. System Navigation
+                when {
+                    lower.contains("home") -> {
+                        EraAccessibilityService.instance?.pressHome()
+                        onResponse("System", "Navigated Home.")
+                        return
+                    }
+                    lower.contains("back") -> {
+                        EraAccessibilityService.instance?.pressBack()
+                        onResponse("System", "Navigated Back.")
+                        return
+                    }
+                    lower.contains("screenshot") -> {
+                        EraAccessibilityService.instance?.takeScreenshot()
+                        onResponse("System", "Captured screen.")
+                        return
+                    }
+                    lower.contains("notification") -> {
+                        EraAccessibilityService.instance?.openNotifications()
+                        onResponse("System", "Notifications opened.")
+                        return
+                    }
+                }
+
+                // 5. Dynamic Sub-Agents
+                when {
+                    lower.contains("deal") || lower.contains("price") || lower.contains("buy") || lower.contains("सस्ता") -> {
+                        onResponse("DealHunter", "DealHunter active: Scanning Amazon & Flipkart for the lowest price.")
+                        return
+                    }
+                    lower.contains("travel") || lower.contains("ticket") || lower.contains("train") || lower.contains("flight") -> {
+                        onResponse("TravelVoyager", "TravelVoyager active: Checking route timings and hotel availability.")
+                        return
+                    }
+                    lower.contains("read") || lower.contains("pdf") || lower.contains("summary") -> {
+                        onResponse("DocuSense", "DocuSense active: Reading screen context and generating summary.")
+                        return
+                    }
+                }
+
+                // 6. Gemini Cloud AI Brain (For Infinite Knowledge)
+                if (geminiApiKey.isNotBlank()) {
+                    callGeminiApi(command, geminiApiKey, personality) { responseText ->
+                        onResponse("GeminiBrain", responseText)
+                    }
+                    return
+                }
+
+                // Default Fallback
+                onResponse("ERA", "Task received: '$command'. Processing now.")
+            }
+
+            private fun callGeminiApi(prompt: String, apiKey: String, personality: String, callback: (String) -> Unit) {
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        val client = OkHttpClient()
+                        val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey"
+
+                        val systemInstruction = when (personality) {
+                            "Jarvis" -> "You are ERA, an advanced female AI assistant inspired by Jarvis. Speak concisely, with British intelligence and poise."
+                            "Tactical" -> "You are ERA, a tactical military HUD AI. Keep answers ultra-concise, under 2 sentences."
+                            else -> "You are ERA, a friendly, witty, highly intelligent female AI assistant. Keep responses concise and conversational."
+                        }
+
+                        val jsonBody = JSONObject().apply {
+                            put("contents", JSONArray().apply {
+                                put(JSONObject().apply {
+                                    put("parts", JSONArray().apply {
+                                        put(JSONObject().apply {
+                                            put("text", "$systemInstruction User asks: $prompt")
+                                        })
+                                    })
+                                })
+                            })
+                        }
+
+                        val mediaType = "application/json; charset=utf-8".toMediaType()
+                        val requestBody = jsonBody.toString().toRequestBody(mediaType)
+                        val request = Request.Builder().url(url).post(requestBody).build()
+
+                        val response = client.newCall(request).execute()
+                        if (response.isSuccessful) {
+                            val respStr = response.body?.string() ?: ""
+                            val root = JSONObject(respStr)
+                            val candidates = root.optJSONArray("candidates")
+                            val firstCandidate = candidates?.optJSONObject(0)
+                            val content = firstCandidate?.optJSONObject("content")
+                            val parts = content?.optJSONArray("parts")
+                            val text = parts?.optJSONObject(0)?.optString("text", "Task completed.") ?: "Task completed."
+                            callback(text.trim())
+                        } else {
+                            callback("AI Brain returned status: ${response.code}")
+                        }
+                    } catch (e: Exception) {
+                        callback("Could not connect to Gemini Brain: ${e.message}")
+                    }
+                }
+            }
+
+            private fun launchApp(context: Context, appName: String): Boolean {
+                val pm = context.packageManager
+                val knownPackages = mapOf(
+                    "whatsapp" to "com.whatsapp",
+                    "youtube" to "com.google.android.youtube",
+                    "chrome" to "com.android.chrome",
+                    "camera" to "com.google.android.GoogleCamera",
+                    "instagram" to "com.instagram.android",
+                    "facebook" to "com.facebook.katana",
+                    "settings" to "com.android.settings",
+                    "maps" to "com.google.android.apps.maps",
+                    "photos" to "com.google.android.apps.photos"
+                )
+
+                val pkgName = knownPackages[appName]
+                if (pkgName != null) {
+                    val intent = pm.getLaunchIntentForPackage(pkgName)
+                    if (intent != null) {
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        context.startActivity(intent)
+                        return true
+                    }
+                }
+
+                val installed = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+                for (app in installed) {
+                    val label = pm.getApplicationLabel(app).toString()
+                    if (label.contains(appName, ignoreCase = true)) {
+                        val intent = pm.getLaunchIntentForPackage(app.packageName)
+                        if (intent != null) {
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            context.startActivity(intent)
+                            return true
+                        }
+                    }
+                }
+                return false
+            }
+
+            private fun toggleTorch(context: Context, enable: Boolean) {
+                try {
+                    val camManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                    val cameraId = camManager.cameraIdList[0]
+                    camManager.setTorchMode(cameraId, enable)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+        KOTLIN_ENGINE
+
+        # Sci-Fi Themes, Voice Controls & Gemini Settings UI in MainActivity
+        cat << 'KOTLIN_MAIN' > app/src/main/java/com/era/assistant/MainActivity.kt
+        package com.era.assistant
+
+        import android.app.ActivityManager
+        import android.content.Context
+        import android.content.Intent
+        import android.content.IntentFilter
+        import android.media.MediaPlayer
+        import android.os.BatteryManager
+        import android.os.Bundle
+        import android.speech.RecognitionListener
+        import android.speech.RecognizerIntent
+        import android.speech.SpeechRecognizer
+        import android.speech.tts.TextToSpeech
+        import androidx.activity.ComponentActivity
+        import androidx.activity.compose.setContent
+        import androidx.compose.animation.core.*
+        import androidx.compose.foundation.Canvas
+        import androidx.compose.foundation.background
+        import androidx.compose.foundation.border
+        import androidx.compose.foundation.clickable
+        import androidx.compose.foundation.layout.*
+        import androidx.compose.foundation.rememberScrollState
+        import androidx.compose.foundation.shape.RoundedCornerShape
+        import androidx.compose.foundation.verticalScroll
+        import androidx.compose.material.icons.Icons
+        import androidx.compose.material.icons.filled.Mic
+        import androidx.compose.material.icons.filled.MicOff
+        import androidx.compose.material.icons.filled.Settings
+        import androidx.compose.material3.*
+        import androidx.compose.runtime.*
+        import androidx.compose.ui.Alignment
+        import androidx.compose.ui.Modifier
+        import androidx.compose.ui.draw.scale
+        import androidx.compose.ui.geometry.Offset
+        import androidx.compose.ui.graphics.Brush
+        import androidx.compose.ui.graphics.Color
+        import androidx.compose.ui.graphics.drawscope.Stroke
+        import androidx.compose.ui.text.font.FontFamily
+        import androidx.compose.ui.text.font.FontWeight
+        import androidx.compose.ui.unit.dp
+        import androidx.compose.ui.unit.sp
+        import kotlinx.coroutines.CoroutineScope
+        import kotlinx.coroutines.Dispatchers
+        import kotlinx.coroutines.launch
+        import okhttp3.MediaType.Companion.toMediaType
+        import okhttp3.OkHttpClient
+        import okhttp3.Request
+        import okhttp3.RequestBody.Companion.toRequestBody
+        import java.io.File
+        import java.io.FileOutputStream
+        import java.text.SimpleDateFormat
+        import java.util.*
+
+        enum class SciFiTheme(val displayName: String, val primary: Color, val bg: Color, val boxBg: Color) {
+            CYBER_CYAN("Cyber Cyan (Jarvis)", Color(0xFF00E5FF), Color(0xFF060A12), Color(0xFF0D1424)),
+            QUANTUM_PURPLE("Quantum Purple", Color(0xFFD500F9), Color(0xFF0B0612), Color(0xFF170C24)),
+            MATRIX_GREEN("Matrix Green", Color(0xFF00E676), Color(0xFF040A06), Color(0xFF09140C)),
+            SOLAR_GOLD("Solar Gold (Friday)", Color(0xFFFFD600), Color(0xFF0E0B04), Color(0xFF1E1708))
+        }
+
+        class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
+
+            private var speechRecognizer: SpeechRecognizer? = null
+            private var textToSpeech: TextToSpeech? = null
+            private val isListening = mutableStateOf(false)
+            private val terminalLogs = mutableStateListOf<String>()
+            private val lastCommand = mutableStateOf("Ready for commands...")
+
+            // Settings States
+            private val currentTheme = mutableStateOf(SciFiTheme.CYBER_CYAN)
+            private val selectedVoice = mutableStateOf("Google India Female")
+            private val geminiApiKey = mutableStateOf("")
+            private val elevenApiKey = mutableStateOf("")
+            private val aiPersonality = mutableStateOf("Friendly")
+            private val voicePitch = mutableStateOf(1.22f)
+            private val voiceSpeed = mutableStateOf(0.95f)
+
+            override fun onCreate(savedInstanceState: Bundle?) {
+                super.onCreate(savedInstanceState)
+                startService(Intent(this, ShakeDetectorService::class.java))
+
+                val prefs = getSharedPreferences("era_prefs", Context.MODE_PRIVATE)
+                val themeName = prefs.getString("theme", SciFiTheme.CYBER_CYAN.name)
+                currentTheme.value = SciFiTheme.valueOf(themeName ?: SciFiTheme.CYBER_CYAN.name)
+                selectedVoice.value = prefs.getString("voice", "Google India Female") ?: "Google India Female"
+                geminiApiKey.value = prefs.getString("gemini_key", "") ?: ""
+                elevenApiKey.value = prefs.getString("eleven_key", "") ?: ""
+                aiPersonality.value = prefs.getString("personality", "Friendly") ?: "Friendly"
+                voicePitch.value = prefs.getFloat("pitch", 1.22f)
+                voiceSpeed.value = prefs.getFloat("speed", 0.95f)
+
+                textToSpeech = TextToSpeech(this, this)
+                setupSpeechRecognizer()
+
+                setContent {
+                    var showSettings by remember { mutableStateOf(false) }
+
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        EraHudDashboard(
+                            theme = currentTheme.value,
+                            isListening = isListening.value,
+                            logs = terminalLogs,
+                            statusText = lastCommand.value,
+                            onMicClick = { toggleListening() },
+                            onSettingsClick = { showSettings = true }
+                        )
+
+                        if (showSettings) {
+                            EraSettingsDialog(
+                                theme = currentTheme.value,
+                                selectedVoice = selectedVoice.value,
+                                geminiKey = geminiApiKey.value,
+                                elevenKey = elevenApiKey.value,
+                                personality = aiPersonality.value,
+                                pitch = voicePitch.value,
+                                speed = voiceSpeed.value,
+                                onThemeChange = { 
+                                    currentTheme.value = it
+                                    prefs.edit().putString("theme", it.name).apply()
+                                },
+                                onVoiceChange = {
+                                    selectedVoice.value = it
+                                    prefs.edit().putString("voice", it).apply()
+                                    applyVoiceSetting()
+                                },
+                                onGeminiKeyChange = {
+                                    geminiApiKey.value = it
+                                    prefs.edit().putString("gemini_key", it).apply()
+                                },
+                                onElevenKeyChange = {
+                                    elevenApiKey.value = it
+                                    prefs.edit().putString("eleven_key", it).apply()
+                                },
+                                onPersonalityChange = {
+                                    aiPersonality.value = it
+                                    prefs.edit().putString("personality", it).apply()
+                                },
+                                onPitchChange = {
+                                    voicePitch.value = it
+                                    prefs.edit().putFloat("pitch", it).apply()
+                                    applyVoiceSetting()
+                                },
+                                onSpeedChange = {
+                                    voiceSpeed.value = it
+                                    prefs.edit().putFloat("speed", it).apply()
+                                    applyVoiceSetting()
+                                },
+                                onDismiss = { showSettings = false }
+                            )
+                        }
+                    }
+                }
+            }
+
+            private fun setupSpeechRecognizer() {
+                speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
+                    setRecognitionListener(object : RecognitionListener {
+                        override fun onReadyForSpeech(params: Bundle?) { isListening.value = true }
+                        override fun onBeginningOfSpeech() {}
+                        override fun onRmsChanged(rmsdB: Float) {}
+                        override fun onBufferReceived(buffer: ByteArray?) {}
+                        override fun onEndOfSpeech() { isListening.value = false }
+                        override fun onError(error: Int) { isListening.value = false }
+                        override fun onResults(results: Bundle?) {
+                            isListening.value = false
+                            val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                            if (!matches.isNullOrEmpty()) {
+                                val command = matches[0]
+                                lastCommand.value = command
+                                terminalLogs.add("User: $command")
+                                handleCommand(command)
+                            }
+                        }
+                        override fun onPartialResults(partialResults: Bundle?) {}
+                        override fun onEvent(eventType: Int, params: Bundle?) {}
+                    })
+                }
+            }
+
+            private fun toggleListening() {
+                if (isListening.value) {
+                    speechRecognizer?.stopListening()
+                    isListening.value = false
+                } else {
+                    val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+                    }
+                    speechRecognizer?.startListening(intent)
+                    isListening.value = true
+                }
+            }
+
+            private fun handleCommand(command: String) {
+                EraAgentEngine.processCommand(
+                    this,
+                    command,
+                    geminiApiKey.value,
+                    aiPersonality.value
+                ) { agentName, response ->
+                    terminalLogs.add("[$agentName]: $response")
+                    speakOut(response)
+                }
+            }
+
+            private fun speakOut(text: String) {
+                if (selectedVoice.value == "ElevenLabs Studio AI" && elevenApiKey.value.isNotBlank()) {
+                    speakElevenLabs(text)
+                } else {
+                    textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "ERA_ID")
+                }
+            }
+
+            private fun speakElevenLabs(text: String) {
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        val client = OkHttpClient()
+                        val mediaType = "application/json".toMediaType()
+                        val body = "{\"text\":\"$text\",\"model_id\":\"eleven_monolingual_v1\"}".toRequestBody(mediaType)
+                        val request = Request.Builder()
+                            .url("https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM")
+                            .post(body)
+                            .addHeader("xi-api-key", elevenApiKey.value.trim())
+                            .build()
+
+                        val response = client.newCall(request).execute()
+                        if (response.isSuccessful) {
+                            val tempMp3 = File.createTempFile("era_voice", "mp3", cacheDir)
+                            val fos = FileOutputStream(tempMp3)
+                            fos.write(response.body?.bytes())
+                            fos.close()
+
+                            val mp = MediaPlayer()
+                            mp.setDataSource(tempMp3.path)
+                            mp.prepare()
+                            mp.start()
+                        } else {
+                            textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "ERA_ID")
+                        }
+                    } catch (e: Exception) {
+                        textToSpeech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "ERA_ID")
+                    }
+                }
+            }
+
+            override fun onInit(status: Int) {
+                if (status == TextToSpeech.SUCCESS) {
+                    applyVoiceSetting()
+                    speakOut("ERA System Online.")
+                }
+            }
+
+            private fun applyVoiceSetting() {
+                textToSpeech?.setPitch(voicePitch.value)
+                textToSpeech?.setSpeechRate(voiceSpeed.value)
+
+                when (selectedVoice.value) {
+                    "Google India Female" -> {
+                        textToSpeech?.language = Locale.ENGLISH
+                        textToSpeech?.voices?.firstOrNull { it.name.contains("en-in", true) }?.let {
+                            textToSpeech?.voice = it
+                        }
+                    }
+                    "Google Hindi Female" -> {
+                        textToSpeech?.language = Locale("hi", "IN")
+                    }
+                    "Google US Female" -> {
+                        textToSpeech?.language = Locale.US
+                        textToSpeech?.voices?.firstOrNull { it.name.contains("en-us", true) && it.name.contains("network", true) }?.let {
+                            textToSpeech?.voice = it
+                        }
+                    }
+                }
+            }
+
+            override fun onDestroy() {
+                super.onDestroy()
+                speechRecognizer?.destroy()
+                textToSpeech?.shutdown()
+            }
+        }
+
+        @Composable
+        fun EraHudDashboard(
+            theme: SciFiTheme,
+            isListening: Boolean,
+            logs: List<String>,
+            statusText: String,
+            onMicClick: () -> Unit,
+            onSettingsClick: () -> Unit
+        ) {
+            val context = androidx.compose.ui.platform.LocalContext.current
+
+            val timeString = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date()) }
+            val dateString = remember { SimpleDateFormat("EEE, dd MMM yyyy", Locale.getDefault()).format(Date()) }
+
+            val actManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val memInfo = ActivityManager.MemoryInfo()
+            actManager.getMemoryInfo(memInfo)
+            val availRamGb = (memInfo.availMem / (1024 * 1024 * 1024.0)).let { "%.1f".format(it) }
+
+            val batteryStatus: Intent? = IntentFilter(Intent.ACTION_BATTERY_CHANGED).let { filter ->
+                context.registerReceiver(null, filter)
+            }
+            val batteryPct = batteryStatus?.let {
+                val level = it.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                val scale = it.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+                level * 100 / scale
+            } ?: 100
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(theme.bg)
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        HudStatBox("DATE & TIME", "$timeString\n$dateString", theme.primary)
+                        HudStatBox("RAM", "${availRamGb} GB", theme.primary)
+                        HudStatBox("BATTERY", "$batteryPct%", theme.primary)
+                    }
+
+                    IconButton(
+                        onClick = onSettingsClick,
+                        modifier = Modifier
+                            .border(1.dp, theme.primary.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                            .background(theme.boxBg)
+                    ) {
+                        Icon(Icons.Default.Settings, contentDescription = "Settings", tint = theme.primary)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Box(
+                    modifier = Modifier
+                        .size(240.dp)
+                        .clickable { onMicClick() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    AnimatedAiOrb(isListening = isListening, color = theme.primary)
+                    Icon(
+                        imageVector = if (isListening) Icons.Default.Mic else Icons.Default.MicOff,
+                        contentDescription = "Microphone",
+                        tint = if (isListening) Color.White else theme.primary,
+                        modifier = Modifier.size(48.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = if (isListening) "ERA LISTENING..." else "ERA STANDBY (SAY 'HEY ERA' OR TAP)",
+                    color = theme.primary,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp
+                )
+
+                Spacer(modifier = Modifier.height(18.dp))
+
+                Text(
+                    text = "AGENT TERMINAL & LOGS",
+                    color = Color.Gray,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.align(Alignment.Start)
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .background(theme.boxBg, RoundedCornerShape(8.dp))
+                        .border(1.dp, theme.primary.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                        .padding(12.dp)
+                ) {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        logs.takeLast(7).forEach { log ->
+                            Text(
+                                text = "> $log",
+                                color = theme.primary.copy(alpha = 0.9f),
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        @Composable
+        fun EraSettingsDialog(
+            theme: SciFiTheme,
+            selectedVoice: String,
+            geminiKey: String,
+            elevenKey: String,
+            personality: String,
+            pitch: Float,
+            speed: Float,
+            onThemeChange: (SciFiTheme) -> Unit,
+            onVoiceChange: (String) -> Unit,
+            onGeminiKeyChange: (String) -> Unit,
+            onElevenKeyChange: (String) -> Unit,
+            onPersonalityChange: (String) -> Unit,
+            onPitchChange: (Float) -> Unit,
+            onSpeedChange: (Float) -> Unit,
+            onDismiss: () -> Unit
+        ) {
+            var tempGeminiKey by remember { mutableStateOf(geminiKey) }
+            var tempElevenKey by remember { mutableStateOf(elevenKey) }
+            val scrollState = rememberScrollState()
+
+            AlertDialog(
+                onDismissRequest = onDismiss,
+                containerColor = theme.boxBg,
+                title = {
+                    Text("ERA SETTINGS & CONTROLS", color = theme.primary, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                },
+                text = {
+                    Column(modifier = Modifier.fillMaxWidth().verticalScroll(scrollState)) {
+                        Text("1. GEMINI AI BRAIN KEY:", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        OutlinedTextField(
+                            value = tempGeminiKey,
+                            onValueChange = {
+                                tempGeminiKey = it
+                                onGeminiKeyChange(it)
+                            },
+                            label = { Text("Paste Free Gemini Key", color = Color.Gray) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        Text("2. SCI-FI THEMES:", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        SciFiTheme.values().forEach { t ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clickable { onThemeChange(t) }.padding(vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = (theme == t),
+                                    onClick = { onThemeChange(t) },
+                                    colors = RadioButtonDefaults.colors(selectedColor = theme.primary)
+                                )
+                                Text(t.displayName, color = t.primary, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        Text("3. AI PERSONALITY:", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        listOf("Friendly", "Jarvis", "Tactical").forEach { p ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clickable { onPersonalityChange(p) }.padding(vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = (personality == p),
+                                    onClick = { onPersonalityChange(p) },
+                                    colors = RadioButtonDefaults.colors(selectedColor = theme.primary)
+                                )
+                                Text(p, color = Color.White, fontSize = 13.sp)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        Text("4. VOICE ENGINE:", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        listOf("Google India Female", "Google Hindi Female", "Google US Female", "ElevenLabs Studio AI").forEach { v ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clickable { onVoiceChange(v) }.padding(vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = (selectedVoice == v),
+                                    onClick = { onVoiceChange(v) },
+                                    colors = RadioButtonDefaults.colors(selectedColor = theme.primary)
+                                )
+                                Text(v, color = Color.White, fontSize = 13.sp)
+                            }
+                        }
+
+                        if (selectedVoice == "ElevenLabs Studio AI") {
+                            OutlinedTextField(
+                                value = tempElevenKey,
+                                onValueChange = {
+                                    tempElevenKey = it
+                                    onElevenKeyChange(it)
+                                },
+                                label = { Text("ElevenLabs API Key", color = Color.Gray) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        Text("5. VOICE PITCH (Sweetness):", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Slider(
+                            value = pitch,
+                            onValueChange = { onPitchChange(it) },
+                            valueRange = 0.8f..1.5f,
+                            colors = SliderDefaults.colors(thumbColor = theme.primary, activeTrackColor = theme.primary)
+                        )
+
+                        Text("6. VOICE SPEED:", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Slider(
+                            value = speed,
+                            onValueChange = { onSpeedChange(it) },
+                            valueRange = 0.7f..1.3f,
+                            colors = SliderDefaults.colors(thumbColor = theme.primary, activeTrackColor = theme.primary)
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = onDismiss) {
+                        Text("SAVE & CLOSE", color = theme.primary, fontWeight = FontWeight.Bold)
+                    }
+                }
+            )
+        }
+
+        @Composable
+        fun HudStatBox(title: String, value: String, accentColor: Color) {
+            Box(
+                modifier = Modifier
+                    .border(1.dp, accentColor.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                    .background(Color(0xFF0F1829))
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(text = title, fontSize = 8.sp, color = Color.Gray, fontFamily = FontFamily.Monospace)
+                    Text(text = value, fontSize = 11.sp, color = accentColor, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                }
+            }
+        }
+
+        @Composable
+        fun AnimatedAiOrb(isListening: Boolean, color: Color) {
+            val infiniteTransition = rememberInfiniteTransition(label = "orb_pulse")
+            val scale by infiniteTransition.animateFloat(
+                initialValue = 0.85f,
+                targetValue = if (isListening) 1.25f else 1.05f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(if (isListening) 600 else 1800, easing = FastOutSlowInEasing),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "scale"
+            )
+
+            Canvas(modifier = Modifier.fillMaxSize().scale(scale)) {
+                val center = Offset(size.width / 2, size.height / 2)
+                val radius = size.minDimension / 3
+
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(color.copy(alpha = 0.8f), color.copy(alpha = 0.2f), Color.Transparent),
+                        center = center,
+                        radius = radius * 1.5f
+                    ),
+                    radius = radius * 1.4f
+                )
+
+                drawCircle(
+                    color = color,
+                    radius = radius,
+                    style = Stroke(width = 3.dp.toPx())
+                )
+            }
+        }
+        KOTLIN_MAIN
 
         cat << 'EOF' > build.gradle.kts
         plugins {
@@ -81,8 +928,8 @@ jobs:
                 applicationId = "com.era.assistant"
                 minSdk = 26
                 targetSdk = 34
-                versionCode = 1
-                versionName = "1.0.0"
+                versionCode = 5
+                versionName = "1.2.0"
 
                 vectorDrawables {
                     useSupportLibrary = true
