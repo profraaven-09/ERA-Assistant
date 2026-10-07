@@ -22,7 +22,7 @@ jobs:
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
 
-    - name: Generate Android Project & Build APK
+    - name: Generate Project & Build APK
       run: |
         # Create directory structure
         mkdir -p app/src/main/java/com/era/assistant
@@ -441,4 +441,323 @@ jobs:
             private val lastCommand = mutableStateOf("Ready for commands...")
 
             private val currentTheme = mutableStateOf(SciFiTheme.CYBER_CYAN)
-            private val selectedVoice = mutableStateOf("Google India Female
+            private val selectedVoice = mutableStateOf("Google India Female")
+            private val geminiApiKey = mutableStateOf("")
+            private val elevenApiKey = mutableStateOf("")
+            private val aiPersonality = mutableStateOf("Friendly")
+            private val voicePitch = mutableStateOf(1.22f)
+            private val voiceSpeed = mutableStateOf(0.95f)
+
+            override fun onCreate(savedInstanceState: Bundle?) {
+                super.onCreate(savedInstanceState)
+                startService(Intent(this, ShakeDetectorService::class.java))
+
+                val prefs = getSharedPreferences("era_prefs", Context.MODE_PRIVATE)
+                val themeName = prefs.getString("theme", SciFiTheme.CYBER_CYAN.name)
+                currentTheme.value = SciFiTheme.valueOf(themeName ?: SciFiTheme.CYBER_CYAN.name)
+                selectedVoice.value = prefs.getString("voice", "Google India Female") ?: "Google India Female"
+                geminiApiKey.value = prefs.getString("gemini_key", "") ?: ""
+                elevenApiKey.value = prefs.getString("eleven_key", "") ?: ""
+                aiPersonality.value = prefs.getString("personality", "Friendly") ?: "Friendly"
+                voicePitch.value = prefs.getFloat("pitch", 1.22f)
+                voiceSpeed.value = prefs.getFloat("speed", 0.95f)
+
+                textToSpeech = TextToSpeech(this, this)
+                setupSpeechRecognizer()
+
+                setContent {
+                    var showSettings by remember { mutableStateOf(false) }
+
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        EraHudDashboard(
+                            theme = currentTheme.value,
+                            isListening = isListening.value,
+                            logs = terminalLogs,
+                            statusText = lastCommand.value,
+                            onMicClick = { toggleListening() },
+                            onSettingsClick = { showSettings = true }
+                        )
+
+                        if (showSettings) {
+                            EraSettingsDialog(
+                                currentTheme = currentTheme.value,
+                                onThemeChange = { newTheme ->
+                                    currentTheme.value = newTheme
+                                    prefs.edit().putString("theme", newTheme.name).apply()
+                                },
+                                selectedVoice = selectedVoice.value,
+                                onVoiceChange = { v ->
+                                    selectedVoice.value = v
+                                    prefs.edit().putString("voice", v).apply()
+                                },
+                                geminiKey = geminiApiKey.value,
+                                onGeminiKeyChange = { k ->
+                                    geminiApiKey.value = k
+                                    prefs.edit().putString("gemini_key", k).apply()
+                                },
+                                elevenKey = elevenApiKey.value,
+                                onElevenKeyChange = { k ->
+                                    elevenApiKey.value = k
+                                    prefs.edit().putString("eleven_key", k).apply()
+                                },
+                                personality = aiPersonality.value,
+                                onPersonalityChange = { p ->
+                                    aiPersonality.value = p
+                                    prefs.edit().putString("personality", p).apply()
+                                },
+                                pitch = voicePitch.value,
+                                onPitchChange = { pt ->
+                                    voicePitch.value = pt
+                                    prefs.edit().putFloat("pitch", pt).apply()
+                                    textToSpeech?.setPitch(pt)
+                                },
+                                speed = voiceSpeed.value,
+                                onSpeedChange = { spd ->
+                                    voiceSpeed.value = spd
+                                    prefs.edit().putFloat("speed", spd).apply()
+                                    textToSpeech?.setSpeechRate(spd)
+                                },
+                                onClose = { showSettings = false }
+                            )
+                        }
+                    }
+                }
+            }
+
+            private fun toggleListening() {
+                if (isListening.value) {
+                    speechRecognizer?.stopListening()
+                    isListening.value = false
+                } else {
+                    val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-IN")
+                    }
+                    speechRecognizer?.startListening(intent)
+                    isListening.value = true
+                }
+            }
+
+            private fun setupSpeechRecognizer() {
+                speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
+                    setRecognitionListener(object : RecognitionListener {
+                        override fun onReadyForSpeech(params: Bundle?) {}
+                        override fun onBeginningOfSpeech() { isListening.value = true }
+                        override fun onRmsChanged(rmsdB: Float) {}
+                        override fun onBufferReceived(buffer: ByteArray?) {}
+                        override fun onEndOfSpeech() { isListening.value = false }
+                        override fun onError(error: Int) { isListening.value = false }
+                        override fun onResults(results: Bundle?) {
+                            isListening.value = false
+                            val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                            if (!matches.isNullOrEmpty()) {
+                                val command = matches[0]
+                                lastCommand.value = command
+                                terminalLogs.add("User: $command")
+                                EraAgentEngine.processCommand(
+                                    this@MainActivity,
+                                    command,
+                                    geminiApiKey.value,
+                                    aiPersonality.value
+                                ) { sender, response ->
+                                    terminalLogs.add("$sender: $response")
+                                    textToSpeech?.speak(response, TextToSpeech.QUEUE_FLUSH, null, null)
+                                }
+                            }
+                        }
+                        override fun onPartialResults(partialResults: Bundle?) {}
+                        override fun onEvent(eventType: Int, params: Bundle?) {}
+                    })
+                }
+            }
+
+            override fun onInit(status: Int) {
+                if (status == TextToSpeech.SUCCESS) {
+                    textToSpeech?.language = Locale("en", "IN")
+                    textToSpeech?.setPitch(voicePitch.value)
+                    textToSpeech?.setSpeechRate(voiceSpeed.value)
+                }
+            }
+
+            override fun onDestroy() {
+                super.onDestroy()
+                speechRecognizer?.destroy()
+                textToSpeech?.stop()
+                textToSpeech?.shutdown()
+            }
+        }
+
+        @Composable
+        fun EraHudDashboard(
+            theme: SciFiTheme,
+            isListening: Boolean,
+            logs: List<String>,
+            statusText: String,
+            onMicClick: () -> Unit,
+            onSettingsClick: () -> Unit
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = theme.bg
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp)
+                        .verticalScroll(rememberScrollState()),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "ERA ASSISTANT HUD",
+                            color = theme.primary,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        IconButton(onClick = onSettingsClick) {
+                            Icon(Icons.Default.Settings, contentDescription = "Settings", tint = theme.primary)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    Box(
+                        modifier = Modifier
+                            .size(120.dp)
+                            .border(2.dp, theme.primary, RoundedCornerShape(60.dp))
+                            .background(theme.boxBg, RoundedCornerShape(60.dp))
+                            .clickable { onMicClick() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (isListening) Icons.Default.Mic else Icons.Default.MicOff,
+                            contentDescription = "Mic",
+                            tint = theme.primary,
+                            modifier = Modifier.size(48.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = if (isListening) "Listening..." else "Tap mic or speak command",
+                        color = theme.primary,
+                        fontSize = 14.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = theme.boxBg)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(text = "Status: $statusText", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(theme.boxBg, RoundedCornerShape(8.dp))
+                            .padding(12.dp)
+                    ) {
+                        Text(text = "System Logs:", color = theme.primary, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        for (log in logs) {
+                            Text(text = log, color = Color.LightGray, fontSize = 13.sp)
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
+                    }
+                }
+            }
+        }
+
+        @Composable
+        fun EraSettingsDialog(
+            currentTheme: SciFiTheme,
+            onThemeChange: (SciFiTheme) -> Unit,
+            selectedVoice: String,
+            onVoiceChange: (String) -> Unit,
+            geminiKey: String,
+            onGeminiKeyChange: (String) -> Unit,
+            elevenKey: String,
+            onElevenKeyChange: (String) -> Unit,
+            personality: String,
+            onPersonalityChange: (String) -> Unit,
+            pitch: Float,
+            onPitchChange: (Float) -> Unit,
+            speed: Float,
+            onSpeedChange: (Float) -> Unit,
+            onClose: () -> Unit
+        ) {
+            AlertDialog(
+                onDismissRequest = onClose,
+                title = { Text("ERA Settings", color = currentTheme.primary) },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        Text("Select Theme", color = Color.White, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        SciFiTheme.values().forEach { t ->
+                            Button(
+                                onClick = { onThemeChange(t) },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (t == currentTheme) t.primary else Color.DarkGray
+                                ),
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                            ) {
+                                Text(t.displayName, color = Color.Black)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("Gemini API Key", color = Color.White, fontWeight = FontWeight.Bold)
+                        OutlinedTextField(
+                            value = geminiKey,
+                            onValueChange = onGeminiKeyChange,
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("AI Personality", color = Color.White, fontWeight = FontWeight.Bold)
+                        listOf("Friendly", "Jarvis", "Tactical").forEach { p ->
+                            Button(
+                                onClick = { onPersonalityChange(p) },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (p == personality) currentTheme.primary else Color.DarkGray
+                                ),
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                            ) {
+                                Text(p, color = Color.Black)
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = onClose) {
+                        Text("Close", color = currentTheme.primary)
+                    }
+                }
+            )
+        }
+        KOTLIN_MAIN
+
+        # Generate Gradle Wrapper & Build APK
+        gradle wrapper
+        chmod +x gradlew
+        ./gradlew assembleDebug
+
+    - name: Upload APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: app-debug
+        path: app/build/outputs/apk/debug/app-debug.apk
