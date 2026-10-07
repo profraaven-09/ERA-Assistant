@@ -25,15 +25,15 @@ jobs:
         mkdir -p app/src/main/res/xml
         mkdir -p app/src/main/res/values
 
-        [ -f MainActivity.kt ] && mv MainActivity.kt app/src/main/java/com/era/assistant/
-        [ -f EraAccessibilityService.kt ] && mv EraAccessibilityService.kt app/src/main/java/com/era/assistant/
-        [ -f EraAgentEngine.kt ] && mv EraAgentEngine.kt app/src/main/java/com/era/assistant/
-        [ -f ShakeDetectorService.kt ] && mv ShakeDetectorService.kt app/src/main/java/com/era/assistant/
-        [ -f AndroidManifest.xml ] && mv AndroidManifest.xml app/src/main/
-        [ -f accessibility_service_config.xml ] && mv accessibility_service_config.xml app/src/main/res/xml/
-        [ -f colors.xml ] && mv colors.xml app/src/main/res/values/
-        [ -f strings.xml ] && mv strings.xml app/src/main/res/values/
-        [ -f themes.xml ] && mv themes.xml app/src/main/res/values/
+        [ -f MainActivity.kt ] && mv -f MainActivity.kt app/src/main/java/com/era/assistant/
+        [ -f EraAccessibilityService.kt ] && mv -f EraAccessibilityService.kt app/src/main/java/com/era/assistant/
+        [ -f EraAgentEngine.kt ] && mv -f EraAgentEngine.kt app/src/main/java/com/era/assistant/
+        [ -f ShakeDetectorService.kt ] && mv -f ShakeDetectorService.kt app/src/main/java/com/era/assistant/
+        [ -f AndroidManifest.xml ] && mv -f AndroidManifest.xml app/src/main/
+        [ -f accessibility_service_config.xml ] && mv -f accessibility_service_config.xml app/src/main/res/xml/
+        [ -f colors.xml ] && mv -f colors.xml app/src/main/res/values/
+        [ -f strings.xml ] && mv -f strings.xml app/src/main/res/values/
+        [ -f themes.xml ] && mv -f themes.xml app/src/main/res/values/
 
         cat << 'EOF' > build.gradle.kts
         plugins {
@@ -120,6 +120,8 @@ jobs:
 
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
+      with:
+        gradle-version: '8.5'
 
     - name: Build Debug APK
       run: gradle assembleDebug
@@ -129,4 +131,3 @@ jobs:
       with:
         name: ERA-Assistant-Debug-APK
         path: app/build/outputs/apk/debug/app-debug.apk
-        
