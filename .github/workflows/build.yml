@@ -35,14 +35,14 @@ jobs:
         [ -f strings.xml ] && mv -f strings.xml app/src/main/res/values/ || true
         [ -f themes.xml ] && mv -f themes.xml app/src/main/res/values/ || true
 
-        cat << 'GRADLE_ROOT' > build.gradle.kts
+        cat << 'EOF' > build.gradle.kts
         plugins {
             id("com.android.application") version "8.2.2" apply false
             id("org.jetbrains.kotlin.android") version "1.9.22" apply false
         }
-        GRADLE_ROOT
+        EOF
 
-        cat << 'GRADLE_SETTINGS' > settings.gradle.kts
+        cat << 'EOF' > settings.gradle.kts
         pluginManagement {
             repositories {
                 google()
@@ -59,9 +59,9 @@ jobs:
         }
         rootProject.name = "EraAssistant"
         include(":app")
-        GRADLE_SETTINGS
+        EOF
 
-        cat << 'GRADLE_APP' > app/build.gradle.kts
+        cat << 'EOF' > app/build.gradle.kts
         plugins {
             id("com.android.application")
             id("org.jetbrains.kotlin.android")
@@ -75,8 +75,8 @@ jobs:
                 applicationId = "com.era.assistant"
                 minSdk = 26
                 targetSdk = 34
-                versionCode = 2
-                versionName = "1.0.2"
+                versionCode = 1
+                versionName = "1.0.0"
 
                 vectorDrawables {
                     useSupportLibrary = true
@@ -116,7 +116,7 @@ jobs:
             implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
             implementation("com.squareup.okhttp3:okhttp:4.12.0")
         }
-        GRADLE_APP
+        EOF
 
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
