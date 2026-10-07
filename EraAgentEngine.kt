@@ -9,15 +9,15 @@ object EraAgentEngine {
 
     fun processCommand(command: String, onResponse: (String, String) -> Unit) {
         val lower = command.lowercase().trim()
-        val service = EraAccessibilityService.instance
+        val context = EraAccessibilityService.instance
 
-        // 1. Greetings (Hira / ERA)
+        // 1. Greetings (ERA / Hira)
         if (lower.contains("hira") || lower.contains("era") || lower.startsWith("hello") || lower.startsWith("hi")) {
             onResponse("ERA", "Hello! I am ERA, your personal super AI. Tell me what to do!")
             return
         }
 
-        // 2. Real App Launching (WhatsApp, YouTube, Camera, Chrome, etc.)
+        // 2. Real App Launching (WhatsApp, YouTube, Chrome, Camera, Instagram)
         if (lower.startsWith("open ") || lower.startsWith("launch ") || lower.contains("whatsapp") || lower.contains("youtube") || lower.contains("camera")) {
             val appQuery = lower.removePrefix("open ").removePrefix("launch ").trim()
             val targetName = when {
@@ -26,60 +26,68 @@ object EraAgentEngine {
                 lower.contains("chrome") -> "chrome"
                 lower.contains("camera") -> "camera"
                 lower.contains("instagram") -> "instagram"
+                lower.contains("settings") -> "settings"
                 else -> appQuery
             }
 
-            service?.let { ctx ->
-                val launched = launchApp(ctx, targetName)
+            if (context != null) {
+                val launched = launchApp(context, targetName)
                 if (launched) {
-                    onResponse("System", "Opening $targetName.")
+                    onResponse("System", "Opening $targetName now.")
                     return
                 }
+            } else {
+                onResponse("System", "Accessibility service needed to open apps.")
+                return
             }
         }
 
         // 3. Torch / Flashlight
         if (lower.contains("torch") || lower.contains("flashlight")) {
             val enable = !lower.contains("off")
-            service?.let { toggleTorch(it, enable) }
-            onResponse("System", if (enable) "Torch turned ON." else "Torch turned OFF.")
+            if (context != null) {
+                toggleTorch(context, enable)
+                onResponse("System", if (enable) "Torch turned ON." else "Torch turned OFF.")
+            } else {
+                onResponse("System", "Accessibility service needed for torch.")
+            }
             return
         }
 
-        // 4. System Navigation
+        // 4. System Navigation via Accessibility
         when {
             lower.contains("home") -> {
-                service?.pressHome()
+                EraAccessibilityService.instance?.pressHome()
                 onResponse("System", "Going to home screen.")
                 return
             }
             lower.contains("back") -> {
-                service?.pressBack()
+                EraAccessibilityService.instance?.pressBack()
                 onResponse("System", "Navigated back.")
                 return
             }
             lower.contains("screenshot") -> {
-                service?.takeScreenshot()
+                EraAccessibilityService.instance?.takeScreenshot()
                 onResponse("System", "Screen captured.")
                 return
             }
             lower.contains("notification") -> {
-                service?.openNotifications()
-                onResponse("System", "Notification panel opened.")
+                EraAccessibilityService.instance?.openNotifications()
+                onResponse("System", "Opened notifications.")
                 return
             }
         }
 
-        // 5. Sub-Agents for Complex Tasks
+        // 5. Dynamic Sub-Agents for Complex Tasks
         when {
             lower.contains("deal") || lower.contains("price") || lower.contains("buy") || lower.contains("सस्ता") -> {
-                onResponse("DealHunter", "Searching Amazon and Flipkart for the lowest price.")
+                onResponse("DealHunter", "DealHunter active: Searching Amazon and Flipkart for lowest prices.")
             }
             lower.contains("travel") || lower.contains("ticket") || lower.contains("train") || lower.contains("flight") -> {
-                onResponse("TravelVoyager", "Planning itinerary, checking train and flight timings.")
+                onResponse("TravelVoyager", "TravelVoyager active: Checking route timings and hotel availability.")
             }
             lower.contains("read") || lower.contains("pdf") || lower.contains("summary") -> {
-                onResponse("DocuSense", "Analyzing document and preparing key highlights.")
+                onResponse("DocuSense", "DocuSense active: Reading screen context and generating summary.")
             }
             else -> {
                 onResponse("ERA", "I understood: '$command'. Processing task.")
@@ -95,7 +103,10 @@ object EraAgentEngine {
             "chrome" to "com.android.chrome",
             "camera" to "com.google.android.GoogleCamera",
             "instagram" to "com.instagram.android",
-            "settings" to "com.android.settings"
+            "facebook" to "com.facebook.katana",
+            "settings" to "com.android.settings",
+            "maps" to "com.google.android.apps.maps",
+            "photos" to "com.google.android.apps.photos"
         )
 
         val pkgName = knownPackages[appName]
